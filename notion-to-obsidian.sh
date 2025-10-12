@@ -20,6 +20,8 @@ EXPORT_CHILD_PAGES="${EXPORT_CHILD_PAGES:-true}"
 EXTRACT_METADATA="${EXTRACT_METADATA:-true}"
 EXPORT_ALL="${EXPORT_ALL:-false}"
 MAX_RETRIES="${MAX_RETRIES:-10}"
+VENV_DIR="${VENV_DIR:-./.venv}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Function to print colored messages
 print_info() {
@@ -43,13 +45,66 @@ check_python() {
     print_info "Python 3 found: $(python3 --version)"
 }
 
-# Function to install notion-exporter
+# Function to create requirements.txt
+create_requirements() {
+    print_info "Creating requirements.txt..."
+    cat > "$SCRIPT_DIR/requirements.txt" << 'EOF'
+# Notion Export Dependencies
+notion-exporter>=1.0.0
+notion-client>=2.0.0
+EOF
+    print_info "requirements.txt created"
+}
+
+# Function to setup virtual environment
+setup_venv() {
+    print_info "Setting up Python virtual environment..."
+    
+    if [ -d "$VENV_DIR" ]; then
+        print_info "Virtual environment already exists at: $VENV_DIR"
+    else
+        print_info "Creating virtual environment at: $VENV_DIR"
+        python3 -m venv "$VENV_DIR" || {
+            print_error "Failed to create virtual environment"
+            print_error "Try: python3 -m pip install --user virtualenv"
+            exit 1
+        }
+        print_info "Virtual environment created"
+    fi
+}
+
+# Function to activate virtual environment
+activate_venv() {
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        source "$VENV_DIR/bin/activate"
+        print_info "Virtual environment activated"
+    else
+        print_error "Virtual environment activation script not found"
+        exit 1
+    fi
+}
+
+# Function to install dependencies in venv
 install_notion_exporter() {
-    print_info "Installing required packages..."
-    pip3 install notion-exporter notion-client || {
+    print_info "Installing required packages in virtual environment..."
+    
+    # Create requirements.txt if it doesn't exist
+    if [ ! -f "$SCRIPT_DIR/requirements.txt" ]; then
+        create_requirements
+    fi
+    
+    # Upgrade pip first
+    python3 -m pip install --upgrade pip setuptools wheel || {
+        print_warning "Failed to upgrade pip, continuing anyway..."
+    }
+    
+    # Install from requirements.txt
+    python3 -m pip install -r "$SCRIPT_DIR/requirements.txt" || {
         print_error "Failed to install packages"
         exit 1
     }
+    
     print_info "Packages installed successfully"
     print_info "  - notion-exporter: For exporting pages to markdown"
     print_info "  - notion-client: For searching and discovering pages"
@@ -337,6 +392,7 @@ Usage: $0 [OPTIONS]
 
 Export Notion pages to Obsidian-compatible markdown files.
 Automatically handles API rate limits with retries and exponential backoff.
+Uses Python virtual environment for clean dependency management.
 
 Environment Variables:
   NOTION_TOKEN         Your Notion API integration token (required)
@@ -347,14 +403,16 @@ Environment Variables:
   OBSIDIAN_VAULT      Path to your Obsidian vault (default: ./obsidian-vault)
   EXPORT_CHILD_PAGES  Export child pages recursively (default: true)
   EXTRACT_METADATA    Add frontmatter metadata (default: true)
+  VENV_DIR            Virtual environment directory (default: ./.venv)
 
 Options:
   -h, --help          Show this help message
-  -i, --install       Only install notion-exporter package
+  -i, --install       Only install dependencies (setup venv + packages)
+  --setup             Same as --install
   -s, --skip-copy     Skip copying to Obsidian vault
 
 Examples:
-  # Export EVERYTHING (recommended for full workspace backup)
+  # First time setup and export everything
   NOTION_TOKEN="secret_xxx" EXPORT_ALL=true $0
 
   # Export specific pages with all their children
@@ -366,14 +424,28 @@ Examples:
   OBSIDIAN_VAULT="/path/to/vault" \\
   $0
 
+  # Just setup the virtual environment (no export)
+  $0 --setup
+
   # Export entire database with all pages
   NOTION_TOKEN="secret_xxx" DATABASE_IDS="database-id" $0
 
-  # Export without child pages (flat export)
-  NOTION_TOKEN="secret_xxx" \\
-  PAGE_IDS="page-id" \\
-  EXPORT_CHILD_PAGES=false \\
-  $0
+  # Custom virtual environment location
+  VENV_DIR="./my-venv" NOTION_TOKEN="secret_xxx" EXPORT_ALL=true $0
+
+Virtual Environment:
+  The script automatically:
+  • Creates a Python virtual environment (.venv/)
+  • Generates requirements.txt
+  • Installs dependencies in isolated environment
+  • Activates venv before running
+  • Keeps your system Python clean
+
+Files Created:
+  .venv/              - Python virtual environment
+  requirements.txt    - Python dependencies
+  notion-export/      - Exported markdown files
+  obsidian-vault/     - Files ready for Obsidian
 
 Rate Limiting:
   The script automatically handles Notion API rate limits:
@@ -399,6 +471,7 @@ Tips for Large Exports:
   • Rate limits are handled automatically - no manual intervention needed
   • Export continues even if some pages fail (non-blocking errors)
   • Files are saved with readable names when possible
+  • Virtual environment ensures clean, reproducible installs
 
 EOF
 }
@@ -407,6 +480,7 @@ EOF
 main() {
     local skip_copy=false
     local install_only=false
+    local setup_only=false
     
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -417,6 +491,10 @@ main() {
                 ;;
             -i|--install)
                 install_only=true
+                shift
+                ;;
+            --setup)
+                setup_only=true
                 shift
                 ;;
             -s|--skip-copy)
@@ -437,11 +515,16 @@ main() {
     # Check prerequisites
     check_python
     
-    # Install notion-exporter
+    # Setup virtual environment
+    setup_venv
+    activate_venv
+    
+    # Install dependencies in venv
     install_notion_exporter
     
-    if [ "$install_only" = true ]; then
-        print_info "Installation complete. Use the script again to export."
+    if [ "$install_only" = true ] || [ "$setup_only" = true ]; then
+        print_info "Setup complete. Virtual environment ready at: $VENV_DIR"
+        print_info "To activate manually: source $VENV_DIR/bin/activate"
         exit 0
     fi
     
