@@ -42,5 +42,3 @@ The script will automatically:
 - ✅ Install `notion-client` package via pip
 - ✅ Run the export with rate limiting
 - ✅ Copy files to your Obsidian vault
-
-**You don't need to touch the GitHub repo at all** - the bash script is completely self-contained! 🎉
