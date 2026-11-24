@@ -50,7 +50,7 @@ create_requirements() {
     print_info "Creating requirements.txt..."
     cat > "$SCRIPT_DIR/requirements.txt" << 'EOF'
 # Notion Export Dependencies
-notion-exporter>=1.0.0
+notion-exporter==0.1.1
 notion-client>=2.0.0
 EOF
     print_info "requirements.txt created"
@@ -102,6 +102,13 @@ install_notion_exporter() {
     # Install from requirements.txt
     python3 -m pip install -r "$SCRIPT_DIR/requirements.txt" || {
         print_error "Failed to install packages"
+        exit 1
+    }
+
+    # Patch the installed notion-exporter (0.1.1) for Notion data_source_id pages,
+    # title lookup, and per-page failure isolation. Idempotent.
+    python3 "$SCRIPT_DIR/patches/notion_exporter_datasource.py" || {
+        print_error "Failed to apply notion-exporter patch"
         exit 1
     }
     
@@ -326,12 +333,15 @@ try:
         
         file_path = export_path / filename
         
-        # Handle duplicate filenames
-        counter = 1
-        while file_path.exists():
+        # Duplicate titles: append a short page id so nothing is overwritten
+        if file_path.exists():
             name_part = filename.rsplit('.', 1)[0]
-            file_path = export_path / f"{name_part}_{counter}.md"
-            counter += 1
+            short_id = page_id.replace('-', '')[:8]
+            file_path = export_path / f"{name_part} {short_id}.md"
+            counter = 1
+            while file_path.exists():
+                file_path = export_path / f"{name_part} {short_id}_{counter}.md"
+                counter += 1
         
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -341,6 +351,15 @@ try:
             print(f"  Saved {saved_count}/{len(exported_pages)} files...")
     
     print(f"\n✓ All {saved_count} pages saved to: {export_dir}")
+
+    # Per-page failures (skipped, export continued)
+    from notion_exporter import exporter as _nx_exporter
+    failed = getattr(_nx_exporter, '_FAILED_PAGES', [])
+    log_path = os.environ.get('EXPORT_ERROR_LOG', './export-errors.log')
+    with open(log_path, 'w', encoding='utf-8') as f:
+        for item in failed:
+            f.write(f"{item['kind']}\t{item['id']}\t{item['error']}\n")
+    print(f"Skipped pages (errors): {len(failed)}  -> {log_path}")
     
 except Exception as e:
     print(f"\n" + "="*60)
@@ -362,6 +381,7 @@ PYTHON_SCRIPT
     export EXPORT_CHILD_PAGES="$EXPORT_CHILD_PAGES"
     export EXTRACT_METADATA="$EXTRACT_METADATA"
     export EXPORT_ALL="$EXPORT_ALL"
+    export EXPORT_ERROR_LOG="$SCRIPT_DIR/export-errors.log"
     
     python3 /tmp/notion_export.py
     
